@@ -2,6 +2,7 @@ from fastapi import FastAPI
 import hashlib
 from models.CrackRequest import CrackRequest
 import logging
+from app.utils import phone_to_int, int_to_phone
 
 # -------- Logging -------- #
 logging.basicConfig(
@@ -40,30 +41,3 @@ def crack(req: CrackRequest):
 
     logger.info("X No match in range")
     return {"found": False}
-
-
-def phone_to_int(phone: str) -> int:
-    """
-    Converts a phone number string (e.g., "050-1234567") into an integer.
-
-    Args:
-        phone (str): A phone number in string format.
-
-    Returns:
-        int: The phone number as a plain integer (e.g., 501234567).
-    """
-    return int(phone.replace("-", ""))
-
-
-def int_to_phone(i: int) -> str:
-    """
-    Converts an integer to a phone number string (e.g., 501234567 -> "050-1234567").
-
-    Args:
-        i (int): A phone number as an integer.
-        
-    Returns:
-        str: The formatted phone number string.
-    """
-    s = f"{i:010d}"
-    return f"{s[:3]}-{s[3:]}"

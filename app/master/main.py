@@ -3,6 +3,7 @@ import hashlib
 import httpx
 from typing import List, Tuple
 import logging
+from app.utils import phone_to_int, int_to_phone
 
 # -------- Logging Setup -------- #
 logging.basicConfig(
@@ -11,31 +12,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("master")
 # --------------------------------
-
-def phone_to_int(phone: str) -> int:
-    """
-    Converts a phone number string to an integer.
-
-    Args:
-        phone (str): Phone number in the format "05X-XXXXXXX".
-
-    Returns:
-        int: The numeric representation of the phone number.
-    """
-    return int(phone.replace("-", ""))
-
-def int_to_phone(i: int) -> str:
-    """
-    Converts an integer to a phone number string.
-
-    Args:
-        i (int): The numeric phone number.
-
-    Returns:
-        str: The formatted phone number string.
-    """
-    s = f"{i:010d}"
-    return f"{s[:3]}-{s[3:]}"
 
 def generate_ranges(start: int, end: int, chunks: int) -> List[Tuple[int, int]]:
     """
