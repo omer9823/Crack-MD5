@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 import hashlib
-from models.CrackRequest import CrackRequest
+from app.minion.models.CrackRequest import CrackRequest
 import logging
 from app.utils import phone_to_int, int_to_phone
 
