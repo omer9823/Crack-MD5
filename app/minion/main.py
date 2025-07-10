@@ -1,7 +1,15 @@
 from fastapi import FastAPI
 import hashlib
 from models.CrackRequest import CrackRequest
+import logging
 
+# -------- Logging -------- #
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [MINION] %(message)s"
+)
+logger = logging.getLogger("minion")
+# -------------------------- #
 
 app = FastAPI()
 
@@ -19,6 +27,7 @@ def crack(req: CrackRequest):
         dict: A dictionary indicating whether the password was found,
               and if so, what the password is.
     """
+    logger.info(f"Received range: {req.range_start} – {req.range_end}")
     start = phone_to_int(req.range_start)
     end = phone_to_int(req.range_end)
     target_hash = req.hash.lower()
@@ -26,8 +35,10 @@ def crack(req: CrackRequest):
     for i in range(start, end + 1):
         phone = int_to_phone(i)
         if hashlib.md5(phone.encode()).hexdigest() == target_hash:
+            logger.info(f"✓ Match found: {phone}")
             return {"found": True, "password": phone}
 
+    logger.info("X No match in range")
     return {"found": False}
 
 

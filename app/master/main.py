@@ -2,6 +2,15 @@ import asyncio
 import hashlib
 import httpx
 from typing import List, Tuple
+import logging
+
+# -------- Logging Setup -------- #
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger("master")
+# --------------------------------
 
 def phone_to_int(phone: str) -> int:
     """
@@ -69,14 +78,19 @@ async def send_to_minion(port: int, hash_val: str, start: int, end: int):
     }
 
     try:
+        logger.info(f"[MASTER] Sending range {data['range_start']} – {data['range_end']} to minion on port {port}")
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.post(url, json=data)
             res.raise_for_status()
             result = res.json()
             if result.get("found"):
+                logger.info(f"[✓] Password found by minion {port}: {result['password']}")
                 return result["password"]
+            else:
+                logger.info(f"[X] Minion {port} completed range without match")
+
     except Exception as e:
-        print(f"[!] Minion at port {port} failed for range {start}-{end}: {e}")
+        logger.warning(f"[!] Minion {port} failed for range {start}-{end}: {e}")
     return None
 
 async def main():
@@ -97,7 +111,7 @@ async def main():
     minion_ports = [8001, 8002, 8003, 8004]
 
     for hash_val in hashes:
-        print(f"\n[>] Cracking hash: {hash_val[:8]}...")
+        logger.info(f"[MASTER] Starting crack for hash {hash_val[:8]}...")
         start = phone_to_int("050-0000000")
         end = phone_to_int("059-9999999")
         ranges = generate_ranges(start, end, len(minion_ports))
@@ -111,9 +125,9 @@ async def main():
         passwords = [p for p in results if p]
 
         if passwords:
-            print(f"[✓] Cracked password: {passwords[0]}")
+            logger.info(f"[✓] Final cracked password: {passwords[0]}")
         else:
-            print(f"[X] No match found")
+            logger.info(f"[X] No match found for hash {hash_val[:8]}")
 
 if __name__ == "__main__":
     asyncio.run(main())
