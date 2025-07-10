@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 import hashlib
+from typing import Optional
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
 from app.minion.models.CrackRequest import CrackRequest
 import logging
 from app.utils import phone_to_int, int_to_phone
@@ -13,31 +16,37 @@ logger = logging.getLogger("minion")
 # -------------------------- #
 
 app = FastAPI()
+executor = ProcessPoolExecutor()
+
+def crack_range_sync(hash_val: str, r_start: int, r_end: int, prefix: str) -> Optional[str]:
+    """
+    Brute-force the MD5 hash over phone numbers with the given prefix and range.
+    """
+    for i in range(r_start, r_end + 1):
+        phone = int_to_phone(int(f"{prefix}{str(i).zfill(7)}"))
+        candidate_hash = hashlib.md5(phone.encode()).hexdigest()
+        if candidate_hash == hash_val:
+            return phone
+    return None
 
 @app.post("/crack")
-def crack(req: CrackRequest):
+async def crack(req: CrackRequest):
     """
-    Attempts to crack the given MD5 hash by brute-forcing all phone numbers
-    in the given range (inclusive). If a match is found, the password is returned.
-
-    Args:
-        req (CrackRequest): An object containing the hash to crack,
-                            and the start and end of the phone number range.
-
-    Returns:
-        dict: A dictionary indicating whether the password was found,
-              and if so, what the password is.
+    Handle a cracking request:
+    - Convert phone ranges to integers
+    - Run the MD5 brute-force search in a background thread
+    - Return whether a matching phone number was found
     """
-    logger.info(f"Received range: {req.range_start} – {req.range_end}")
-    start = phone_to_int(req.range_start)
-    end = phone_to_int(req.range_end)
-    target_hash = req.hash.lower()
+    r_start = phone_to_int(req.range_start)
+    r_end = phone_to_int(req.range_end)
+    logger.info(f"Received request to crack hash {req.hash[:8]}... in range {req.range_start} to {req.range_end}")
 
-    for i in range(start, end + 1):
-        phone = int_to_phone(i)
-        if hashlib.md5(phone.encode()).hexdigest() == target_hash:
-            logger.info(f"✓ Match found: {phone}")
-            return {"found": True, "password": phone}
+    loop = asyncio.get_running_loop()
+    password = await loop.run_in_executor(executor, crack_range_sync, req.hash, r_start, r_end, req.prefix)
 
-    logger.info("X No match in range")
-    return {"found": False}
+    if password:
+        logger.info(f"[✓] Found password for hash {req.hash[:8]}: {password}")
+    else:
+        logger.info(f"[X] No match for hash {req.hash[:8]} in range.")
+
+    return {"found": password is not None, "password": password}

@@ -3,7 +3,7 @@ import hashlib
 import httpx
 from typing import List, Tuple
 import logging
-from app.utils import phone_to_int, int_to_phone
+from app.utils import phone_to_int, int_to_phone ##step 2
 
 # -------- Logging Setup -------- #
 logging.basicConfig(
@@ -11,99 +11,147 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger("master")
-# --------------------------------
+RANGE_SIZE = 1_000_000
 
-def generate_ranges(start: int, end: int, chunks: int) -> List[Tuple[int, int]]:
-    """
-    Splits a numeric range into approximately equal-sized sub-ranges.
 
-    Args:
-        start (int): The beginning of the range.
-        end (int): The end of the range.
-        chunks (int): The number of sub-ranges to create.
+# -------- Master -------- #
+class Master:
+    def __init__(self, minion_ports: List[int], input_file: str, output_file: str):
+        """
+        Initialize the master service with list of minion ports,
+        input file containing hashes, and output file to write results.
+        """
+        self.minion_ports = minion_ports
+        self.input_file = input_file
+        self.output_file = output_file
+        self.queue = asyncio.Queue()
+        self.results = []
+        self.found_hashes = set()
+        self.found_hashes_lock = asyncio.Lock()
+        self.start = phone_to_int("050-0000000")
+        self.end = phone_to_int("059-9999999")
+        self.current_minion_index = 0
 
-    Returns:
-        List[Tuple[int, int]]: A list of (start, end) tuples for each sub-range.
-    """
-    step = (end - start + 1) // chunks
-    ranges = []
-    for i in range(chunks):
-        chunk_start = start + i * step
-        chunk_end = start + (i + 1) * step - 1 if i < chunks - 1 else end
-        ranges.append((chunk_start, chunk_end))
-    return ranges
+    def get_next_minion(self) -> int:
+        """
+        Return the next minion port using Round Robin strategy.
+        """
+        port = self.minion_ports[self.current_minion_index]
+        self.current_minion_index = (self.current_minion_index + 1) % len(self.minion_ports)
+        return port
 
-async def send_to_minion(port: int, hash_val: str, start: int, end: int):
-    """
-    Sends a cracking task to a specific Minion service over REST API.
+    async def load_hashes(self):
+        """
+        Load hashes from the input file and enqueue their phone number ranges.
+        """
+        try:
+            with open(self.input_file, "r") as f:
+                for line in f:
+                    hash_val = line.strip()
+                    if hash_val:
+                        num_ranges = ((self.end - self.start) // RANGE_SIZE) + 1
+                        ranges = self.generate_ranges(self.start, self.end, num_ranges)
+                        for r_start, r_end in ranges:
+                            await self.queue.put((hash_val, r_start, r_end))
+            logger.info(f"Loaded hashes from {self.input_file}")
+        except FileNotFoundError:
+            logger.error(f"Input file not found: {self.input_file}")
 
-    Args:
-        port (int): The port where the Minion is running.
-        hash_val (str): The MD5 hash to crack.
-        start (int): Start of the phone number range.
-        end (int): End of the phone number range.
+    def generate_ranges(self, start: int, end: int, chunks: int) -> List[Tuple[int, int]]:
+        """
+        Split the full phone range into smaller chunks (ranges) based on number of minions.
+        """
+        step = (end - start + 1) // chunks
+        ranges = []
+        for i in range(chunks):
+            chunk_start = start + i * step
+            chunk_end = start + (i + 1) * step - 1 if i < chunks - 1 else end
+            ranges.append((chunk_start, chunk_end))
+        return ranges
 
-    Returns:
-        str or None: The cracked password if found, otherwise None.
-    """
-    url = f"http://localhost:{port}/crack"
-    data = {
-        "hash": hash_val,
-        "range_start": int_to_phone(start),
-        "range_end": int_to_phone(end)
-    }
+    async def send_to_minion(self, port: int, hash_val: str, r_start: int, r_end: int) -> str | None:
+        """
+        Send a cracking task to a specific minion. Return the password if found, otherwise None.
+        """
+        url = f"http://localhost:{port}/crack"
+        range_start_str = int_to_phone(r_start)
+        range_end_str = int_to_phone(r_end)
+        prefix = range_start_str[:3]  # Extract "050", "051", etc.
 
-    try:
-        logger.info(f"[MASTER] Sending range {data['range_start']} – {data['range_end']} to minion on port {port}")
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(url, json=data)
-            res.raise_for_status()
-            result = res.json()
-            if result.get("found"):
-                logger.info(f"[✓] Password found by minion {port}: {result['password']}")
-                return result["password"]
-            else:
-                logger.info(f"[X] Minion {port} completed range without match")
+        data = {
+            "hash": hash_val,
+            "prefix": prefix,
+            "range_start": range_start_str,
+            "range_end": range_end_str
+        }
 
-    except Exception as e:
-        logger.warning(f"[!] Minion {port} failed for range {start}-{end}: {e}")
-    return None
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                res = await client.post(url, json=data)
+                res.raise_for_status()
+                result = res.json()
+                if result.get("found"):
+                    return result["password"]
+        except Exception as e:
+            logger.warning(f"[!] Minion {port} failed: {e}")
+        return None
 
-async def main():
-    """
-    Main coordination function that distributes cracking tasks
-    across multiple Minion services.
 
-    - Reads hashes to crack (currently hardcoded)
-    - Divides phone ranges between Minions
-    - Sends tasks concurrently
-    - Prints results
-    """
-    hashes = [
-        hashlib.md5("050-1234567".encode()).hexdigest(),
-        hashlib.md5("054-9876543".encode()).hexdigest()
-    ]
+    async def worker(self, worker_id: int):
+        """
+        Worker that continuously takes ranges from the queue,
+        sends them to minions, and puts them back on failure.
+        """
+        while True:
+            try:
+                hash_val, r_start, r_end = await self.queue.get()
+                async with self.found_hashes_lock:
+                    if hash_val in self.found_hashes:
+                        logger.info(f"[⏩ {self.name}] Skipping hash {hash_val}, already cracked.")
+                        self.task_queue.task_done()
+                        continue
 
-    minion_ports = [8001, 8002, 8003, 8004]
+                port = self.get_next_minion()
+                logger.info(f"[Worker-{worker_id}] Trying hash {hash_val[:8]} on Minion {port} | Range {int_to_phone(r_start)} - {int_to_phone(r_end)}")
 
-    for hash_val in hashes:
-        logger.info(f"[MASTER] Starting crack for hash {hash_val[:8]}...")
-        start = phone_to_int("050-0000000")
-        end = phone_to_int("059-9999999")
-        ranges = generate_ranges(start, end, len(minion_ports))
+                password = await self.send_to_minion(port, hash_val, r_start, r_end)
 
-        tasks = [
-            send_to_minion(minion_ports[i], hash_val, r[0], r[1])
-            for i, r in enumerate(ranges)
-        ]
+                if password:
+                    result = f"{hash_val} -> {password}"
+                    self.results.append(result)
+                    self.found_hashes.add(hash_val) 
+                    logger.info(f"[✓] Cracked: {result}")
+                
+            except Exception as e:
+                logger.warning(f"[Worker-{worker_id}] Error: {e}")
+                await self.queue.put((hash_val, r_start, r_end))
+            finally:
+                self.queue.task_done()
 
-        results = await asyncio.gather(*tasks)
-        passwords = [p for p in results if p]
+    async def run(self):
+        """
+        Run the master process:
+        - Load hashes and ranges into the queue
+        - Spawn async workers
+        - Wait for all tasks to complete
+        - Save results to output file
+        """
+        await self.load_hashes()
+        tasks = [asyncio.create_task(self.worker(i)) for i in range(len(self.minion_ports))]
+        await self.queue.join()
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-        if passwords:
-            logger.info(f"[✓] Final cracked password: {passwords[0]}")
-        else:
-            logger.info(f"[X] No match found for hash {hash_val[:8]}")
+        with open(self.output_file, "w") as f:
+            for line in self.results:
+                f.write(line + "\n")
+        logger.info(f"Results saved to {self.output_file}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    master = Master(
+        minion_ports=[8001, 8002, 8003, 8004],
+        input_file="input.txt",
+        output_file="results.txt"
+    )
+    asyncio.run(master.run())
