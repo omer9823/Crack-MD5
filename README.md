@@ -1,31 +1,43 @@
-# 📞 Password Cracking Service (Pentera Home Assignment)
+# Pentera Password Cracking Service
 
-This project implements a distributed password cracking system for phone-based passwords (e.g., `05X-XXXXXXX`) that have been hashed using **MD5**.
+This project is a multicomponent password cracking system for MD5 hashes of Israeli phone numbers (format: `05X-XXXXXXX`).  
+It simulates a distributed system using one **master** and multiple **minions**.
 
-The system consists of:
-- **Minion Service** – Brute-forces a phone number range and returns a match if found.
-- **Master Service** – Reads input hashes and distributes work among multiple Minions via REST.
+## 📦 Components
+
+### 1. Minion
+A FastAPI service that receives:
+- `hash`: MD5 to crack
+- `prefix`: phone prefix (e.g., `050`)
+- `range_start`, `range_end`: the phone number range
+
+Each minion processes a range and returns the cracked password (if found).
+
+### 2. Master
+Reads hashes from an input file and distributes the work among minions via REST calls.
+
+- Supports crash-handling and task retrying.
+- Uses `asyncio.Queue` and multiple workers.
+- Saves results to `results.txt`.
 
 ---
 
-## 🚀 How It Works
+## 🚀 Running the System
 
-- The **master** reads one or more MD5 hashes (e.g., from a list or file).
-- It splits the full phone number space into chunks (e.g., 4), each assigned to a **Minion**.
-- Each **Minion** receives a hash and a phone number range, and checks all numbers in that range.
-- If a Minion finds a matching password, it reports it back via REST.
+### 1. Setup virtualenv
+python -m venv venv
+source venv/bin/activate   # on Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
----
+### 2. Run Minions
+uvicorn app.minion.main:app --port 8001
+uvicorn app.minion.main:app --port 8002
+uvicorn app.minion.main:app --port 8003
+uvicorn app.minion.main:app --port 8004
+# etc.
 
-## Running the Services
+### 2. Run Master
+python -m app.master.main
 
-Start 4 Minion (each in a separate terminal)
 
-uvicorn minion.main:app --port 8001
-uvicorn minion.main:app --port 8002
-uvicorn minion.main:app --port 8003
-uvicorn minion.main:app --port 8004
 
-Run the Master
-
-python master/main.py
