@@ -33,7 +33,7 @@ def crack_range_sync(hash_val: str, r_start: int, r_end: int) -> Optional[str]:
 async def crack(req: CrackRequest):
     """
     Handle a cracking request:
-    - Run the MD5 brute-force search in a background thread
+    - Run the MD5 brute-force search in a background process using ProcessPoolExecutor
     - Return whether a matching phone number was found
     """
     logger.info(f"Received request to crack hash {req.hash[:8]}... in range {req.range_start} to {req.range_end}")

@@ -2,15 +2,19 @@ import asyncio
 import httpx
 from typing import List, Tuple
 import logging
+from dotenv import load_dotenv
+import os
 from app.utils import phone_to_int, int_to_phone ##step 2
 from app.models.CrackRequest import CrackRequest
+
+load_dotenv(dotenv_path="app/master/.env")
 
 # -------- Logging Setup -------- #
 logging.basicConfig( ## כאשר אני מפקיד למחלקות להשאיר את זה בmain
     level=logging.INFO,
     format="%(asctime)s [%(name)s] [%(levelname)s] %(message)s"
 )
-RANGE_SIZE = 1_000_000
+RANGE_SIZE = int(os.getenv("CHUNK_SIZE", "1000000"))
 
 
 # -------- Master -------- #
@@ -147,8 +151,8 @@ class Master:
 
 if __name__ == "__main__":
     master = Master(
-        minion_ports=[8001, 8002, 8003, 8004],
-        input_file="input.txt",
-        output_file="results.txt"
+        minion_ports = os.getenv("MINION_PORTS").split(","),
+        input_file = os.getenv("INPUT_FILE", "input.txt"),
+        output_file = os.getenv("OUTPUT_FILE", "results.txt")
     )
     asyncio.run(master.run())
