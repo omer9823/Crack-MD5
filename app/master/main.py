@@ -108,8 +108,8 @@ class Master:
                 hash_val, r_start, r_end = await self.queue.get()
                 async with self.found_hashes_lock:
                     if hash_val in self.found_hashes:
-                        self.logger.info(f"[⏩ {self.name}] Skipping hash {hash_val}, already cracked.")
-                        self.task_queue.task_done()
+                        self.logger.info(f"[{worker_id}] Skipping hash {hash_val}, already cracked.")
+                        self.queue.task_done()
                         continue
 
                 port = self.get_next_minion()
