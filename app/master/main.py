@@ -29,6 +29,7 @@ class Master:
         self.output_file = output_file
         self.queue = asyncio.Queue()
         self.results = []
+        self.all_hashes = set()
         self.found_hashes = set()
         self.found_hashes_lock = asyncio.Lock()
         self.start = phone_to_int("050-0000000")
@@ -46,21 +47,25 @@ class Master:
 
     async def load_hashes(self):
         """
-        Load hashes from the input file and enqueue their phone number ranges.
+        Load all hashes from file into a set, and enqueue only the phone number ranges.
         """
         try:
-            num_ranges = ((self.end - self.start) // RANGE_SIZE) + 1
-            ranges = self.generate_ranges(self.start, self.end, num_ranges)
-
             with open(self.input_file, "r") as f:
                 for line in f:
                     hash_val = line.strip()
                     if hash_val:
-                        for r_start, r_end in ranges:
-                            await self.queue.put((hash_val, r_start, r_end))
-            self.logger.info(f"Loaded hashes from {self.input_file}")
+                        self.all_hashes.add(hash_val)
+
+            num_ranges = ((self.end - self.start) // RANGE_SIZE) + 1
+            ranges = self.generate_ranges(self.start, self.end, num_ranges)
+
+            for r_start, r_end in ranges:
+                await self.queue.put((r_start, r_end))
+
+            self.logger.info(f"Loaded {len(self.all_hashes)} hashes from {self.input_file}")
         except FileNotFoundError:
             self.logger.error(f"Input file not found: {self.input_file}")
+
 
     def generate_ranges(self, start: int, end: int, chunks: int) -> List[Tuple[int, int]]:
         """
@@ -74,61 +79,74 @@ class Master:
             ranges.append((chunk_start, chunk_end))
         return ranges
 
-    async def send_to_minion(self, port: int, hash_val: str, r_start: int, r_end: int) -> str | None:
+    async def send_to_minion(self, port: int, hashes: List[str], r_start: int, r_end: int) -> dict:
         """
-        Send a cracking task to a specific minion. Return the password if found, otherwise None.
+        Send a list of hashes and a range to a minion. Return a dict of found matches: hash → phone.
         """
         url = f"http://localhost:{port}/crack"
 
         crack_req = CrackRequest(
-            hash = hash_val,
-            range_start = r_start,
-            range_end = r_end
+            hashes=hashes,
+            range_start=r_start,
+            range_end=r_end
         )
 
         try:
             async with httpx.AsyncClient(timeout=20) as client:
-                print(crack_req.model_dump())
                 res = await client.post(url, json=crack_req.model_dump())
                 res.raise_for_status()
-                result = res.json()
-                if result.get("found"):
-                    return result["password"]
+                return res.json()
         except Exception as e:
             self.logger.warning(f"[!] Minion {port} failed: {e}")
-        return None
-
+            return {}
 
     async def worker(self, worker_id: int):
         """
-        Worker that continuously takes ranges from the queue,
-        sends them to minions, and puts them back on failure.
+        Asynchronous worker that continuously:
+        - Retrieves a phone number range from the queue
+        - Sends the current list of uncracked hashes and the range to an available Minion
+        - Processes the result (a dictionary of matched hashes to phone numbers)
+        - Adds cracked results to the result list and marks hashes as found
+        - Retries the task in case of failure
+        - Stops if there are no more hashes left to crack
         """
         while True:
             try:
-                hash_val, r_start, r_end = await self.queue.get()
+                r_start, r_end = await self.queue.get()
+
                 async with self.found_hashes_lock:
-                    if hash_val in self.found_hashes:
-                        self.logger.info(f"[{worker_id}] Skipping hash {hash_val}, already cracked.")
-                        self.queue.task_done()
-                        continue
+                    hashes_to_send = list(self.all_hashes - self.found_hashes)
+
+                if not hashes_to_send:
+                    self.queue.task_done()
+                    while not self.queue.empty():
+                        try:
+                            self.queue.get_nowait()
+                            self.queue.task_done()
+                        except asyncio.QueueEmpty:
+                            break
+                        
+                    return
 
                 port = self.get_next_minion()
-                self.logger.info(f"[Worker-{worker_id}] Trying hash {hash_val[:8]} on Minion {port} | Range {int_to_phone(r_start)} - {int_to_phone(r_end)}")
+                self.logger.info(f"[Worker-{worker_id}] Sending {len(hashes_to_send)} hashes to Minion {port} | Range {int_to_phone(r_start)} - {int_to_phone(r_end)}")
 
-                password = await self.send_to_minion(port, hash_val, r_start, r_end)
+                matches = await self.send_to_minion(port, hashes_to_send, r_start, r_end)
 
-                if password:
-                    result = f"{hash_val} -> {password}"
-                    self.results.append(result)
-                    self.found_hashes.add(hash_val) 
-                    self.logger.info(f"[✓] Cracked: {result}")
-                
+                async with self.found_hashes_lock:
+                    for h, phone in matches.items():
+                        if h not in self.found_hashes:
+                            result = f"{h} -> {phone}"
+                            self.results.append(result)
+                            self.found_hashes.add(h)
+                            self.logger.info(f"[Worker-{worker_id}] [✓] Cracked: {result}")
+
             except Exception as e:
                 self.logger.warning(f"[Worker-{worker_id}] Error: {e}")
-                await self.queue.put((hash_val, r_start, r_end))
+                await self.queue.put((r_start, r_end))
             finally:
                 self.queue.task_done()
+
 
     async def run(self):
         """
