@@ -1,13 +1,13 @@
 import hashlib
-from app.minion.main import crack_range_sync
+from app.minion.minion_service import MinionCracker
 from app.utils import phone_to_int
 
 def test_crack_finds_correct_phone():
     phone = "050-0000001"
     hash_val = hashlib.md5(phone.encode()).hexdigest()
     i = phone_to_int(phone)
- 
-    result = crack_range_sync(hash_val, i, i)
+
+    result = MinionCracker(hash_val, i, i).crack_range_sync()
     assert result == phone
 
 def test_crack_returns_none_for_wrong_hash():
@@ -15,11 +15,11 @@ def test_crack_returns_none_for_wrong_hash():
     r_start = phone_to_int("050-0000000")
     r_end = phone_to_int("050-0000005")
 
-    result = crack_range_sync(hash_val, r_start, r_end)
+    result = MinionCracker(hash_val, r_start, r_end).crack_range_sync()
     assert result is None
 
 def test_crack_empty_range():
-    result = crack_range_sync("irrelevant", 10, 5)
+    result = MinionCracker("irrelevant", 10, 5).crack_range_sync()
     assert result is None
 
 def test_crack_edge_case():
@@ -27,5 +27,5 @@ def test_crack_edge_case():
     hash_val = hashlib.md5(phone.encode()).hexdigest()
     i = phone_to_int(phone)
 
-    result = crack_range_sync(hash_val, i, i)
+    result = MinionCracker(hash_val, i, i).crack_range_sync()
     assert result == phone
