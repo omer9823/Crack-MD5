@@ -1,6 +1,7 @@
 from pydantic import BaseModel
+from typing import List
 
 class CrackRequest(BaseModel):
-    hash: str
+    hashes: List[str]
     range_start: int
     range_end: int
