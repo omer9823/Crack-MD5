@@ -1,16 +1,15 @@
 import asyncio
-import hashlib
 import httpx
 from typing import List, Tuple
 import logging
 from app.utils import phone_to_int, int_to_phone ##step 2
+from app.models.CrackRequest import CrackRequest
 
 # -------- Logging Setup -------- #
-logging.basicConfig(
+logging.basicConfig( ## כאשר אני מפקיד למחלקות להשאיר את זה בmain
     level=logging.INFO,
     format="%(asctime)s [%(name)s] [%(levelname)s] %(message)s"
 )
-logger = logging.getLogger("MASTER")
 RANGE_SIZE = 1_000_000
 
 
@@ -31,6 +30,7 @@ class Master:
         self.start = phone_to_int("050-0000000")
         self.end = phone_to_int("059-9999999")
         self.current_minion_index = 0
+        self.logger = logging.getLogger("MASTER")
 
     def get_next_minion(self) -> int:
         """
@@ -53,9 +53,9 @@ class Master:
                         ranges = self.generate_ranges(self.start, self.end, num_ranges)
                         for r_start, r_end in ranges:
                             await self.queue.put((hash_val, r_start, r_end))
-            logger.info(f"Loaded hashes from {self.input_file}")
+            self.logger.info(f"Loaded hashes from {self.input_file}")
         except FileNotFoundError:
-            logger.error(f"Input file not found: {self.input_file}")
+            self.logger.error(f"Input file not found: {self.input_file}")
 
     def generate_ranges(self, start: int, end: int, chunks: int) -> List[Tuple[int, int]]:
         """
@@ -74,26 +74,23 @@ class Master:
         Send a cracking task to a specific minion. Return the password if found, otherwise None.
         """
         url = f"http://localhost:{port}/crack"
-        range_start_str = int_to_phone(r_start)
-        range_end_str = int_to_phone(r_end)
-        prefix = range_start_str[:3]  # Extract "050", "051", etc.
 
-        data = {
-            "hash": hash_val,
-            "prefix": prefix,
-            "range_start": range_start_str,
-            "range_end": range_end_str
-        }
+        crack_req = CrackRequest(
+            hash = hash_val,
+            range_start = r_start,
+            range_end = r_end
+        )
 
         try:
             async with httpx.AsyncClient(timeout=20) as client:
-                res = await client.post(url, json=data)
+                print(crack_req.model_dump())
+                res = await client.post(url, json=crack_req.model_dump())
                 res.raise_for_status()
                 result = res.json()
                 if result.get("found"):
                     return result["password"]
         except Exception as e:
-            logger.warning(f"[!] Minion {port} failed: {e}")
+            self.logger.warning(f"[!] Minion {port} failed: {e}")
         return None
 
 
@@ -107,12 +104,12 @@ class Master:
                 hash_val, r_start, r_end = await self.queue.get()
                 async with self.found_hashes_lock:
                     if hash_val in self.found_hashes:
-                        logger.info(f"[⏩ {self.name}] Skipping hash {hash_val}, already cracked.")
+                        self.logger.info(f"[⏩ {self.name}] Skipping hash {hash_val}, already cracked.")
                         self.task_queue.task_done()
                         continue
 
                 port = self.get_next_minion()
-                logger.info(f"[Worker-{worker_id}] Trying hash {hash_val[:8]} on Minion {port} | Range {int_to_phone(r_start)} - {int_to_phone(r_end)}")
+                self.logger.info(f"[Worker-{worker_id}] Trying hash {hash_val[:8]} on Minion {port} | Range {int_to_phone(r_start)} - {int_to_phone(r_end)}")
 
                 password = await self.send_to_minion(port, hash_val, r_start, r_end)
 
@@ -120,10 +117,10 @@ class Master:
                     result = f"{hash_val} -> {password}"
                     self.results.append(result)
                     self.found_hashes.add(hash_val) 
-                    logger.info(f"[✓] Cracked: {result}")
+                    self.logger.info(f"[✓] Cracked: {result}")
                 
             except Exception as e:
-                logger.warning(f"[Worker-{worker_id}] Error: {e}")
+                self.logger.warning(f"[Worker-{worker_id}] Error: {e}")
                 await self.queue.put((hash_val, r_start, r_end))
             finally:
                 self.queue.task_done()
@@ -146,7 +143,7 @@ class Master:
         with open(self.output_file, "w") as f:
             for line in self.results:
                 f.write(line + "\n")
-        logger.info(f"Results saved to {self.output_file}")
+        self.logger.info(f"Results saved to {self.output_file}")
 
 if __name__ == "__main__":
     master = Master(

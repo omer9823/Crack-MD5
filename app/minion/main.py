@@ -3,7 +3,7 @@ import hashlib
 from typing import Optional
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
-from app.minion.models.CrackRequest import CrackRequest
+from app.models.CrackRequest import CrackRequest
 import logging
 from app.utils import phone_to_int, int_to_phone
 
@@ -18,12 +18,12 @@ logger = logging.getLogger("MINION")
 app = FastAPI()
 executor = ProcessPoolExecutor()
 
-def crack_range_sync(hash_val: str, r_start: int, r_end: int, prefix: str) -> Optional[str]:
+def crack_range_sync(hash_val: str, r_start: int, r_end: int) -> Optional[str]:
     """
     Brute-force the MD5 hash over phone numbers with the given prefix and range.
     """
     for i in range(r_start, r_end + 1):
-        phone = int_to_phone(int(f"{prefix}{str(i).zfill(7)}"))
+        phone = int_to_phone(i)
         candidate_hash = hashlib.md5(phone.encode()).hexdigest()
         if candidate_hash == hash_val:
             return phone
@@ -33,16 +33,13 @@ def crack_range_sync(hash_val: str, r_start: int, r_end: int, prefix: str) -> Op
 async def crack(req: CrackRequest):
     """
     Handle a cracking request:
-    - Convert phone ranges to integers
     - Run the MD5 brute-force search in a background thread
     - Return whether a matching phone number was found
     """
-    r_start = phone_to_int(req.range_start)
-    r_end = phone_to_int(req.range_end)
     logger.info(f"Received request to crack hash {req.hash[:8]}... in range {req.range_start} to {req.range_end}")
 
     loop = asyncio.get_running_loop()
-    password = await loop.run_in_executor(executor, crack_range_sync, req.hash, r_start, r_end, req.prefix)
+    password = await loop.run_in_executor(executor, crack_range_sync, req.hash, req.range_start, req.range_end)
 
     if password:
         logger.info(f"[✓] Found password for hash {req.hash[:8]}: {password}")
