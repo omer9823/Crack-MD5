@@ -49,12 +49,13 @@ class Master:
         Load hashes from the input file and enqueue their phone number ranges.
         """
         try:
+            num_ranges = ((self.end - self.start) // RANGE_SIZE) + 1
+            ranges = self.generate_ranges(self.start, self.end, num_ranges)
+
             with open(self.input_file, "r") as f:
                 for line in f:
                     hash_val = line.strip()
                     if hash_val:
-                        num_ranges = ((self.end - self.start) // RANGE_SIZE) + 1
-                        ranges = self.generate_ranges(self.start, self.end, num_ranges)
                         for r_start, r_end in ranges:
                             await self.queue.put((hash_val, r_start, r_end))
             self.logger.info(f"Loaded hashes from {self.input_file}")
