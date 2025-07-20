@@ -10,9 +10,9 @@ from app.utils import phone_to_int, int_to_phone
 # -------- Logging -------- #
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [MINION] %(message)s"
+    format="%(asctime)s [%(name)s] [%(levelname)s] %(message)s"
 )
-logger = logging.getLogger("minion")
+logger = logging.getLogger("MINION")
 # -------------------------- #
 
 app = FastAPI()
